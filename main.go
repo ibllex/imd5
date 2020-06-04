@@ -82,7 +82,7 @@ func check(sum string, path string, sumChan chan string, coreChan chan int) {
 
 	if ok, _ := isFileExists(path); ok {
 		md5, _ := MD5File(path)
-		if md5 == sum {
+		if strings.ToUpper(md5) == strings.ToUpper(sum) {
 			result += "[ √ ]"
 		} else {
 			result += "[ ✗ ]"
