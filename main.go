@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"crypto/md5"
 	"encoding/hex"
+	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -16,6 +19,7 @@ import (
 )
 
 var enc mahonia.Encoder
+var dec mahonia.Decoder
 
 // GetExecutablePath Get current executable's real path
 func GetExecutablePath() (path string, dir string) {
@@ -54,6 +58,17 @@ func MD5File(file string) (string, error) {
 	return MD5Bytes(data), nil
 }
 
+func isFileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return true, err
+}
+
 func calc(current string, path string, md5Chan chan string, coreChan chan int) {
 	md5, _ := MD5File(path)
 	value := md5 + " " + strings.Replace(path, current+"/", "", 1) + "\r\n"
@@ -62,16 +77,61 @@ func calc(current string, path string, md5Chan chan string, coreChan chan int) {
 	fmt.Print(value)
 }
 
-func main() {
-	var current = filepath.ToSlash(GetCurrentPath())
+func check(sum string, path string, sumChan chan string, coreChan chan int) {
+	result := ""
+
+	if ok, _ := isFileExists(path); ok {
+		md5, _ := MD5File(path)
+		if md5 == sum {
+			result += "[ √ ]"
+		} else {
+			result += "[ ✗ ]"
+		}
+	} else {
+		result += "[ ! ]"
+	}
+
+	result += " " + path
+	<-coreChan
+	sumChan <- enc.ConvertString(result)
+	fmt.Println(result)
+}
+
+func checkMD5(sumFile string, routineChan chan int, sumChan chan string) {
 	var count = 0
+
+	fp, err := os.OpenFile(sumFile, os.O_RDONLY, 0777)
+	if err != nil {
+		fmt.Println("Could not open file " + sumFile)
+		return
+	}
+	defer fp.Close()
+
+	br := bufio.NewReader(fp)
+	for {
+		data, _, err := br.ReadLine()
+		if err == io.EOF {
+			break
+		}
+
+		line := strings.Fields(dec.ConvertString(string(data)))
+		if len(line) == 2 {
+			count++
+			routineChan <- -1
+			go check(line[0], line[1], sumChan, routineChan)
+		}
+	}
+
+	for i := 0; i < count; i++ {
+		value := <-sumChan
+		fp.WriteString(value)
+	}
+}
+
+func sumMD5(routineChan chan int, md5Chan chan string) {
+	var count = 0
+	var current = filepath.ToSlash(GetCurrentPath())
 	var name = path.Base(current)
-	var coreNum = runtime.NumCPU()
-
-	var md5Chan = make(chan string)
-	var routineChan = make(chan int, coreNum)
-
-	enc = mahonia.NewEncoder("gbk")
 
 	err := filepath.Walk(current, func(path string, f os.FileInfo, err error) error {
 		if f == nil {
@@ -105,5 +165,25 @@ func main() {
 	for i := 0; i < count; i++ {
 		value := <-md5Chan
 		fp.WriteString(value)
+	}
+}
+
+func main() {
+	var sumFile string
+	var coreNum = runtime.NumCPU()
+
+	var md5Chan = make(chan string)
+	var routineChan = make(chan int, coreNum)
+
+	flag.StringVar(&sumFile, "c", "", "read MD5 sums from the FILEs and check them")
+	flag.Parse()
+
+	enc = mahonia.NewEncoder("gbk")
+	dec = mahonia.NewDecoder("gbk")
+
+	if sumFile != "" {
+		checkMD5(sumFile, routineChan, md5Chan)
+	} else {
+		sumMD5(routineChan, md5Chan)
 	}
 }
